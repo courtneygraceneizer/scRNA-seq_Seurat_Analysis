@@ -1,0 +1,320 @@
+---
+title: "Seurat Walk-through"
+author: "Ann Loraine and Courtney-Grace Neizer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This Markdown document uses code and data from a [Satija Lab Seurat tutorial](https://satijalab.org/seurat/v3.2/pbmc3k_tutorial.html) to show how to create a plot showing cell
+type clusters obtained from single-cell mRNA-Seq data.
+
+Note that the tutorial is long and includes a lot of code demonstrating quality-control and quality-checking procedures. This shorter Markdown document does not include those steps. 
+
+In addition to getting to know the Seurat library, we are also going to determine whether the analysis presented
+in the tutorial can be reproduced. 
+
+## Analysis
+
+### Introduction to the analysis
+
+The next sections walk through using the Seurat library to cluster cells based on gene expression patterns from a single-cell RNA-Seq experiment. 
+
+Data are from 10X Genomics, a company that makes instruments and reagents for single-cell RNA-Seq experiments.
+
+The basic pattern of how this works is that we read some data into an object of type `Seurat`, named after the library. 
+
+Why this name? George Seurat was a French painter who lived in the late 1800s. 
+He is famous for using and improving a painting technique called pointillism, where the painter applies little
+dots of paint to a canvas. When you look at the painting from far away, you can see shapes and figures. 
+When you look at the painting up close, all you see are the dots.
+
+The entire point of the `Seurat` library is to identify cell types from single-cell RNA-Seq data, like you 
+saw done in Dr. Regev's video lecture. This walk-through shows you how to produce the two-dimensional scatter
+plot cluster images from Dr. Regev's slides.
+
+One thing you need to keep in mind as you follow the tutorial is that each command applies some function to a
+`Seurat` object and then returns the same object, but with some new data added to it. 
+
+This is a bit weird and takes some getting used to, but it's a strategy used by many other packages in R. 
+Everything focuses on adding new information to a large and complex object. 
+
+Unfortunately, this leads to some confusion during interactive, exploratory sometimes because it requires you
+to keep track of what functions you've already called. 
+
+### Setting up
+
+The first time you run this Markdown, you need to install the Seurat library. 
+
+Note that if you use RStudio to run this Markdown, the software will likely detect
+ that your document needs the Seurat library. If yes, it will offer to install it
+ for you. 
+ 
+ If not, you can manually run the `install.packages` command. Un-comment and run 
+ the following line to install the Seurat library.
+ 
+ After you install the software, re-comment the line.
+ 
+```{r}
+#install.packages("Seurat")
+```
+
+Once you have install the library, load it into your environment:
+
+```{r}
+library(Seurat)
+```
+
+Next, get the data for the tutorial. The following code chunk
+downloads the data and unpacks it.
+
+```{r}
+u =  "https://cf.10xgenomics.com/samples/cell/pbmc3k/pbmc3k_filtered_gene_bc_matrices.tar.gz"
+target = file.path("data","filtered_gene_bc_matrices")
+target = "data/filtered_gene_bc_matrices"
+downloaded = "bmc3k_filtered_gene_bc_matrices.tar.gz"
+if (!file.exists(target)) {
+  if (!file.exists(downloaded)) {
+    download.file(u,downloaded,mode="wb")
+  }
+  untar(downloaded,exdir = "data")
+}
+```
+
+Unpacking the file using the `untar` command creates a new folder named `filtered_gene_bc_matrices` inside `data` which contains three files:
+
+* barcodes.tsv
+* genes.tsv
+* matrix.mtx
+
+All three files together define the data from an experiment investigating gene expression in peripheral blood mononuclear Cells (PBMC). 
+
+Make sure you unpack the data into the same folder as your RStudio project file. This ensures that the next step will work properly.
+
+### Load the data
+
+Use the tutorial as guide to create the `Seurat` object that will be progressively modified in the rest of the Markdown:
+
+#### Q1
+
+```{r}
+data.dir = file.path("data","filtered_gene_bc_matrices","hg19")
+pbmc.data = Read10X(data.dir = data.dir)
+pbmc = CreateSeuratObject(counts = pbmc.data, project = "PBMC3K", min.cells = 3, min.features = 200) # modify this line by CG
+pbmc
+```
+
+The object `pbmc` is an instance of an S4 class with class name `Seurat`. Documentation about the class is here: https://github.com/satijalab/seurat/wiki.
+
+A Seurat object stores information about the experiment together with the experimental data. 
+
+The experimental data is essentially a gigantic matrix, where rows represent genes and columns represent cells. 
+
+In this experiment, the matrix has:
+
+* `r nrow(pbmc)` rows (genes)
+* `r ncol(pbmc)` columns (cells)
+
+### Remove low-quality cells
+
+The experimental procedure for generating the single-cell mRNA-Seq data is not perfect. To avoid making wrong conclusions, we need to remove cells (columns) with low quality data. 
+
+The Seurat authors recommend filtering based on the following criteria gleaned from many people's experience analyzing single-cell data.
+
+As advised, we remove cells with:
+
+* mitochondrial genes detected, indicating contamination from mitochondrial RNA
+* too few or zero counts, indicating cells were sick or damaged
+* too many counts, indicating droplets contained more than 1 cell
+
+Calculate the percentage of mitochondrial genes detected using `PercentageFeatureSet` and save the result by adding a value named "percent.mt" to the Seurat object:
+
+#### Q2
+
+```{r}
+pbmc[["percent.mt"]] = PercentageFeatureSet(pbmc, pattern = "^MT-") # CG's modified code
+```
+
+When we do this, the data get stored in Seurat slot `meta.data`.
+
+Next, remove the low-quality cells, using the tutorial as a guide:
+
+#### Q3
+
+```{r}
+pbmc = subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5) # CG's modified code
+pbmc # CG's modified code
+```
+
+The newly filtered matrix contains:
+
+* `r nrow(pbmc)` rows (genes)
+* `r ncol(pbmc)` columns (cells)
+
+### Normalize 
+
+The ultimate goal of the analysis is to identify & visualize groupings of cells, grouped based on the similarity of their gene expression patterns. Doing this requires that we can compare data from different cells. 
+
+Because different cells were sequenced to different depths, we can't compare them without somehow accounting for this. Normalization accounts for different sequencing depths between cells and therefore lets us compare data across cells.
+
+As of this writing, the Seurat file `preprocessing.R` from https://github.com/satijalab/seurat implements the normalization method. 
+
+Normalize by applying a method `NormalizeData`, using the tutorial as a guide:
+
+#### Q4
+
+```{r}
+pbmc = NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)  # CG's modified code
+pbmc  # CG's modified code
+```
+
+### Focus on the most variable genes
+
+According to the tutorial authors, many groups have found that focusing on the most highly-variable genes improves downstream analysis. 
+
+For this next step, we identify the most variable genes across the experiment and ignore everything else. 
+
+Use the same method and parameters used in the tutorial - `FindVariableFeatures`.
+
+#### Q5
+
+```{r}
+pbmc = FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000) #CG's modified code
+head(VariableFeatures(pbmc)) #CG's modified code displays variable features
+```
+
+### Scale genes 
+
+The data are all nicely normalized with respect cells, represented by columns.
+However, the scales are different across genes, represented by rows.
+That is, some genes have high absolute expression levels and others have low absolute expression values. 
+
+To make a good cluster plots, we need to express every gene's expression values per cell in terms of the gene's average 
+expression value across all cells.
+
+This is called "scaling the data". Use the `ScaleData` function with variable `all.genes` as shown in the tutorial:
+
+#### Q6
+
+```{r}
+all.genes = rownames(pbmc) # CG's modified code to get genes in pbmc object
+pbmc = ScaleData(pbmc, features = all.genes) # CG's modified code to scale data in pbmc object
+pbmc # CG's modified code
+```
+
+### Perform linear dimension reduction 
+
+Now that the individual genes' expression values are all expressed in terms of their own means across all the cells, we use principal components analysis to further reduce the data set. 
+
+Use the function `RunPCA` to add principal components to the 
+`Seurat` object `pbmc`, using the tutorial as a guide:
+
+#### Q7
+
+```{r}
+pbmc = RunPCA(pbmc, features = VariableFeatures(object = pbmc))  # CG's modified code
+```
+
+This step identifies principal components, which you can think of as collections of genes that capture most of the variation in the data set. They are typically ranked in terms of how much of the variation they capture. The first principal component captures the most variation, the second capture the next most, and so on.
+
+Once this is done, you (the investigator) would need to visualize the components and decide how many of these principal
+components to include in the next phase of the analysis.
+
+In the tutorial, the authors suggest using the first 10 principal components as a useful default option. Let's do that for now.
+
+### Cluster the cells
+
+Using these first ten principal components, we need to identify clusters. The methods for doing this are complex, but they boil down to using the principal components to compute distances between cells using the `FindNeighbors` function. 
+
+Then we use `FindClusters` to identify clusters. Fill in the same methods described in the tutorial:
+
+#### Q8
+
+```{r} 
+pbmc = FindNeighbors(pbmc, dims = 1:10) # CG's modified code
+pbmc = FindClusters(pbmc, resolution = 0.5) # CG's modified code 
+```
+
+
+### Run non-linear dimensional reduction (UMAP/tSNE)
+
+Next, use the principal components from the previous step as inputs to the UMAP algorithm, which clusters cells in a two-dimensional plot. Do this using the `RunUMAP` methods as shown in the tutorial.
+
+#### Q9
+
+```{r}
+pbmc = RunUMAP(pbmc, dims = 1:10) # CG's modified code
+DimPlot(pbmc, reduction = "umap") # CG's modified code
+```
+
+If the above code is correct, you should see an image with nine color-coded clusters, numbered 0 through 8, as shown in 
+the tutorial section labeled *Run non-linear dimensional reduction (UMAP/tSNE)*.
+
+### Visualize marker gene expression
+
+The cell clusters shown in the above plot exist because there are genes
+that are highly expressed in some cells but not in others. 
+
+If we can identify these genes, then we can use other information
+about what those genes do to find out if the clusters shown on
+the plot represent different cell types. 
+
+The Seurat library has methods for finding differentially 
+expressed genes across clusters. The tutorial provided by the 
+Seurat authors describes how these methods work and then proposes
+marker genes for each cluster. 
+
+They also provide a method `FeaturePlot` that lets us visualize the expression
+of individual genes overlaid onto the cluster plot. 
+
+To see how this can work, use the method  to check that some of the proposed marker genes are indeed mainly expressed in the given clusters:
+
+```{r}
+candidate_markers = c("CD14","MS4A1","CD8A",
+                      "NKG7","FCER1A","PPBP")
+cell_types = c("CD14+Mono","B","CD8+T",
+               "NK","DC","Platelet")
+names(candidate_markers) = cell_types
+FeaturePlot(pbmc, features = candidate_markers) # CG's modified code
+```
+
+
+### Add cell type labels
+
+The tutorial describes how to identify gene markers for each cluster and how to use these markers to determine cell type identify for each cluster.
+
+This is the ultimate goal of this type of analysis: Identification of distinct cell types based on gene expression. 
+
+Use the proposed market genes and images from the tutorial to re-draw your plot 
+showing clusters labeled by cell type:
+
+#### Q10
+
+```{r fig.height=6, fig.width=7.5}
+new.cluster.ids = c("Naive CD4 T", "Memory CD4 T","CD14+ Mono", "B","CD8 T", "FCGR3A+ Mono", "NK", "DC", "Platelet")
+names(new.cluster.ids) = levels(pbmc)
+pbmc = RenameIdents(pbmc, new.cluster.ids)
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend() # CG's modified code
+```
+
+
+## Conclusions
+
+#### Q11
+
+Did your plot perfectly match what was shown in the tutorial? If yes, how
+was it different? 
+
+**No, my plot didn’t perfectly match what was shown in the tutorial. Although I ended up with clusters that were separated and color-coded, there were some slight differences in the positioning and spread of clusters. This could be due to small variations in the data preprocessing steps, parameter settings, or even differences in software versions.**
+
+#### Q12
+
+If it was different, explain: How did it affect your ability to assign
+cell types based on marker gene expression? 
+
+**These differences did make it a bit harder to assign cell types based on marker gene expression. Clear separation between clusters is really important for confidently linking specific markers to cell types. When the clusters aren’t as distinct or if marker expression is spread out across multiple clusters, it becomes trickier to identify cell types accurately. For instance, if certain markers like CD14 don’t show up strongly in the expected clusters, it’s harder to confidently say that those clusters represent monocytes.**
